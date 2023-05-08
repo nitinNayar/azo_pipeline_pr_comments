@@ -112,6 +112,7 @@ steps:
               if (self.SYSTEM_PULLREQUEST_SOURCEBRANCH):
                 # self.BUILD_SOURCEBRANCH = os.getenv('BUILD_SOURCEBRANCH')- Can't use this as this is re-written to 'merge'
                 logging.debug (f"this is a PR as SYSTEM_PULLREQUEST_SOURCEBRANCH is {self.SYSTEM_PULLREQUEST_SOURCEBRANCH}")
+                temp = self.SYSTEM_PULLREQUEST_SOURCEBRANCH
                 self.BUILD_SOURCEBRANCHNAME = temp[temp.rindex('/')+1:]
                 logging.debug (f"BUILD_SOURCEBRANCHNAME is {self.BUILD_SOURCEBRANCHNAME}")
                 self.BUILD_SOURCEBRANCH = os.getenv('SYSTEM_PULLREQUEST_SOURCEBRANCH')
