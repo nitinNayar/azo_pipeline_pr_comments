@@ -1,0 +1,229 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger: none
+
+pr:
+  branches:
+    include:
+      - 'master'
+
+pool:
+  vmImage: ubuntu-latest
+variables:
+- group: semgrep
+
+
+
+steps:
+- checkout: self
+  clean: true
+  fetchDepth: 10000
+# Fetch Depth added as by defualt ADO does a shallow fetch and git  diff will fail
+
+- script: |
+    # echo git show-ref 
+    # git show-ref origin/master
+    # echo list all branches
+    # git branch -a
+    git config --unset-all http.nitinnayar.extraheader
+    git config http.nitinnayar.extraheader "AUTHORIZATION: bearer ${SYSTEM_ACCESSTOKEN}"
+    git config --unset-all http.nitinnayar.extraheader
+    git -c http.extraheader="AUTHORIZATION: bearer ${SYSTEM_ACCESSTOKEN}" fetch origin master:origin/master --depth=2147483647
+    git config --unset-all http.nitinnayar.extraheader
+    echo list all branches after fetch origin
+    git branch -a
+    echo git show-ref
+    git show-ref origin/master
+    echo list all branches
+    git branch -a
+
+    echo deleting remote ref
+    git update-ref -d refs/remotes/origin/master
+    echo git show-ref
+    git show-ref origin/master
+    echo list all branches
+    git branch -a
+    
+    # echo git diff output
+    # git diff --cached --name-status --no-ext-diff -z --diff-filter=ACDMRTUXB --ignore-submodules --relative origin/master --merge-base 
+    # echo git cat-file -e origin/master
+    # git cat-file -e master
+    python -m pip3 install --upgrade pip3
+    pip3 install semgrep
+    echo completed semgrep install
+    semgrep ci --debug --json >> /home/vsts/work/1/a/findings.json
+  env: 
+    SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+    SEMGREP_APP_TOKEN: $(SEMGREP_APP_TOKEN)
+    SEMGREP_PR_ID: $(System.PullRequest.PullRequestNumber)
+    SEMGREP_BASELINE_REF: 'origin/master'
+    VSTS_DISABLEFETCHBYCOMMIT: true
+
+    # BUILD_ARTIFACTSTAGINGDIRECTORY: $(BUILD_ARTIFACTSTAGINGDIRECTORY)
+
+  displayName: 'Semgrep scanning'
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+    ArtifactName: 'findings'
+    publishLocation: 'Container'
+  displayName: 'Publish Findings as Artifact '
+
+- task: Bash@3
+  inputs:
+    targetType: 'inline'
+    script: |
+      # this is inline code
+      env | sort
+- task: PythonScript@0
+  inputs:
+    scriptSource: 'inline'
+    script: |
+      import requests
+      import os
+      import pprint
+      import json
+      
+      class Message():
+          '''Instance of a PR Comment message'''
+      
+          def __init__(self):
+              self.SYSTEM_COLLECTIONURI = os.getenv('SYSTEM_COLLECTIONURI')
+              self.BUILD_SOURCEVERSION = os.getenv('BUILD_SOURCEVERSION')              
+              self.SYSTEM_PULLREQUEST_SOURCEBRANCH = os.getenv('SYSTEM_PULLREQUEST_SOURCEBRANCH')
+              temp = self.SYSTEM_PULLREQUEST_SOURCEBRANCH
+              if (self.SYSTEM_PULLREQUEST_SOURCEBRANCH):
+                # self.BUILD_SOURCEBRANCH = os.getenv('BUILD_SOURCEBRANCH')- Can't use this as this is re-written to 'merge'
+                self.BUILD_SOURCEBRANCHNAME = temp[temp.rindex('/')+1:]
+                # s[s.rindex('-')+1:]
+                # SYSTEM_PULLREQUEST_SOURCEBRANCH=refs/heads/!dummy-2 and the branch name is !dummy-2
+                self.BUILD_SOURCEBRANCH = os.getenv('SYSTEM_PULLREQUEST_SOURCEBRANCH')
+              else:
+                self.BUILD_SOURCEBRANCH = os.getenv('BUILD_SOURCEBRANCH')
+                self.BUILD_SOURCEBRANCHNAME = os.getenv('BUILD_SOURCEBRANCHNAME')
+                
+              self.PULLREQUESTID = 0
+              self.SYSTEM_TEAMPROJECT = os.getenv('SYSTEM_TEAMPROJECT')
+              self.BUILD_REPOSITORY_ID = os.getenv('BUILD_REPOSITORY_ID')
+              self.url_pr_id= f"{self.SYSTEM_COLLECTIONURI}{self.SYSTEM_TEAMPROJECT}/_apis/git/repositories/" \
+                         f"{self.BUILD_REPOSITORY_ID}/pullRequests?api-version=7.0"
+              # https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-requests/get-pull-requests?view=azure-devops-rest-7.0&tabs=HTTP
+              # PULLREQUEST_ID = f"https://dev.azure.com/{organization}/{project}/_apis/git/repositories/{repositoryId}/pullrequests?api-version=7.0
+              self.url = f"{self.SYSTEM_COLLECTIONURI}{self.SYSTEM_TEAMPROJECT}/_apis/git/repositories/" \
+                         f"{self.BUILD_REPOSITORY_ID}"
+              self.url_link_to_repo = f"{self.SYSTEM_COLLECTIONURI}_git/{self.SYSTEM_TEAMPROJECT}"
+              # self.url = f"{SYSTEM_COLLECTIONURI}{SYSTEM_TEAMPROJECT}/_apis/git/repositories/" \
+              #            f"{BUILD_REPOSITORY_ID}/pullRequests/{PULLREQUESTID}" \
+              #            "/threads?api-version=6.0"
+              self.headers = {
+                  "content-type": "application/json",
+                  "Authorization": f"BEARER {os.getenv('SYSTEM_ACCESSTOKEN')}"
+              }
+          def find_pr_id(self): 
+              # find the Pull request ID 
+              # dummy commit
+              res = requests.get(url=self.url_pr_id, headers = self.headers)
+              pprint.pprint (res.json())
+              res_json = res.json()              
+              self.PULLREQUESTID = res_json["value"][0]["pullRequestId"]
+              print ("Pull Request ID")
+              print (self.PULLREQUESTID)
+
+              
+          def create_comment_url(self):
+              self.url = f"{self.url}/pullRequests/{self.PULLREQUESTID}" \
+                         "/threads?api-version=7.0"
+              print ("Comment URL")
+              print (self.url)
+
+          def add(self, comment: str) -> bool:
+              ''' Add a message to Azure DevOps Pull Request'''
+              data = {
+                  "comments": [
+                      {
+                          "parentCommentId": 0,
+                          "content": comment,
+                          "commentType": 1
+                      }
+                  ],
+                  "status": 1
+              }
+              r = requests.post(url=self.url, json=data, headers=self.headers)
+              print(r)
+
+              if r.status_code == 200:
+                  return True
+              else:
+                  return False
+
+      msg = Message()
+      msg.find_pr_id()
+      msg.create_comment_url()
+
+      # Opening findings.json
+      f = open('/home/vsts/work/1/a/findings.json')
+        
+      # returns JSON object as 
+      # a dictionary
+      findings = json.load(f)
+        
+      # Iterating through the json
+      # list
+      for i in findings['results']:
+          # print(i)
+          # Format for Hyperlink: []() 
+          # Format for code snippet: ``
+          if ((i['extra']['is_ignored'] == False) & (i['extra']['metadata']['semgrep.policy']['slug'] == "rule-board-pr-comments")):
+              msg_summary = i['extra']['message']
+              msg_file_path = i['path']
+
+              msg_src_branch = msg.BUILD_SOURCEBRANCH
+              msg_src_branchname = msg.BUILD_SOURCEBRANCHNAME
+              msg_commit_id = msg.BUILD_SOURCEVERSION
+              msg_file_start_line =  i['start']['line']
+              msg_file_end_line = i['end']['line']
+              msg_file_start_col =  i['start']['col']
+              msg_file_end_col = i['end']['col']
+              msg_shortlink = i['extra']['metadata']['shortlink']
+              msg_vuln_code = i['extra']['lines']
+              msg_semgrep_fingerprint = i['extra']['fingerprint']
+              msg_vuln_code_text = f"/{msg_file_path}\:{msg_file_start_line}"
+              msg_vuln_code_url = f"{msg.url_link_to_repo }" \
+                                  f"?path=/{msg_file_path}&" \
+                                  f"version=GB{msg_src_branchname}&" \
+                                  f"line={msg_file_start_line}&" \
+                                  f"lineEnd={msg_file_end_line}&" \
+                                  f"lineStartColumn={msg_file_start_col}&" \
+                                  f"lineEndColumn={msg_file_end_col}&" \
+                                  f"lineStyle=plain&_a=contents"
+
+              comment = f"Link to code- [{msg_vuln_code_text}]({msg_vuln_code_url}) \n\n" \
+                        f"Vulnerable Code Snippet- `{msg_vuln_code}` \n\n" \
+                        f"Link to Commit- [{msg_commit_id}]({msg.url_link_to_repo }/commit/{msg_commit_id}?ref={msg_src_branch})  \n\n" \
+                        f"Summary- {msg_summary} \n\n" \
+                        f"More details on rule- {msg_shortlink} \n\n" \
+                        f"Semgrep Finding Reference- {msg_semgrep_fingerprint} \n" \
+
+              # comment = f"Link to code- [/{msg_file_path}\:{msg_file_start_line}]({msg.url_link_to_repo }?path=/{msg_file_path}&version=GB{msg_src_branchname}&" \
+              #           f"line={msg_file_start_line}&lineEnd={msg_file_end_line}&lineStartColumn={msg_file_start_col}&" \
+              #           f"lineEndColumn={msg_file_end_col}&lineStyle=plain&_a=contents \n" \
+              #           f"Vulnerable Code Snippet- \'{msg_vuln_code}\' \n" \
+              #           f"Link to Commit- {msg_commit_id} - {msg.url_link_to_repo }/commit/{msg_commit_id}?ref={msg_src_branch}  \n" \
+              #           f"Summary- {msg_summary} \n" \
+              #           f"More details on rule- {msg_shortlink} \n" \
+              #           f"Semgrep Finding Reference- {msg_semgrep_fingerprint} \n" \
+
+              result = msg.add(comment=comment)
+              if result is False:
+                  print("Sending message failed")
+        
+      # Closing file
+      f.close()                  
+      # comment = " This is a test comment"
+  env:
+    SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+  displayName: 'Python script to add pull request comment'
